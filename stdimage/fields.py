@@ -10,12 +10,11 @@ from forms import StdImageFormField
 from widgets import DelAdminFileWidget
 
 
-class ThumbnailField(object):
+class AdditionalMediaField(object):
     """Instances of this class will be used to access data of the
-    generated thumbnails
+    Additional media items created eg. thumbnail and original
 
     """
-
     def __init__(self, name):
         self.name = name
         self.storage = FileSystemStorage()
@@ -28,6 +27,7 @@ class ThumbnailField(object):
 
     def size(self):
         return self.storage.size(self.name)
+
 
 class StdImageFileDescriptor(ImageFileDescriptor):
     """ The thumbnail property of the field should be accessible in instance
@@ -62,7 +62,6 @@ class StdImageField(ImageField):
         """
         size = kwargs.pop('size', None)
         thumbnail_size = kwargs.pop('thumbnail_size', None)
-
         params_size = ('width', 'height', 'force')
         for att_name, att in (('size', size),
                               ('thumbnail_size', thumbnail_size)):
@@ -70,9 +69,10 @@ class StdImageField(ImageField):
                 setattr(self, att_name, dict(map(None, params_size, att)))
             else:
                 setattr(self, att_name, None)
+        self.original = True if kwargs.pop('original', None) == True else None
         super(StdImageField, self).__init__(*args, **kwargs)
 
-    def _get_thumbnail_filename(self, filename):
+    def _append_suffix(self, filename, suffix):
         """Returns the thumbnail name associated to the standard image filename
 
         Example::
@@ -85,8 +85,15 @@ class StdImageField(ImageField):
 
         """
         splitted_filename = list(os.path.splitext(filename))
-        splitted_filename.insert(1, '.thumbnail')
+        splitted_filename.insert(1, '.' + suffix)
         return ''.join(splitted_filename)
+
+    def _get_original_filename(self, filename):
+        return self._append_suffix(filename, 'original')
+
+    def _get_thumbnail_filename(self, filename):
+        return self._append_suffix(filename, 'thumbnail')
+
 
     def _resize_image(self, filename, size):
         """Resizes the image to specified width, height and force option
@@ -147,6 +154,10 @@ class StdImageField(ImageField):
             dst_fullpath = os.path.join(settings.MEDIA_ROOT, dst)
             if os.path.abspath(filename) != os.path.abspath(dst_fullpath):
                 os.rename(filename, dst_fullpath)
+                if self.original:
+                    original_filename = self._get_original_filename(
+                        dst_fullpath)
+                    shutil.copyfile(dst_fullpath, original_filename)
                 if self.size:
                     self._resize_image(dst_fullpath, self.size)
                 if self.thumbnail_size:
@@ -168,8 +179,17 @@ class StdImageField(ImageField):
             filename = self.generate_filename(instance,
                         os.path.basename(getattr(instance, self.name).path))
             thumbnail_filename = self._get_thumbnail_filename(filename)
-            thumbnail_field = ThumbnailField(thumbnail_filename)
+            thumbnail_field = AdditionalMediaField(thumbnail_filename)
             setattr(getattr(instance, self.name), 'thumbnail', thumbnail_field)
+
+    def _set_original(self, instance=None, **kwargs):
+        """Carbon copy of above, should be extrapolated out"""
+        if getattr(instance, self.name):
+            filename = self.generate_filename(instance,
+                        os.path.basename(getattr(instance, self.name).path))
+            original_filename = self._get_original_filename(filename)
+            original_field = AdditionalMediaField(original_filename)
+            setattr(getattr(instance, self.name), 'original', original_field)
 
 
     def formfield(self, **kwargs):
@@ -212,3 +232,4 @@ class StdImageField(ImageField):
         super(StdImageField, self).contribute_to_class(cls, name)
         signals.post_save.connect(self._rename_resize_image, sender=cls)
         signals.post_init.connect(self._set_thumbnail, sender=cls)
+        signals.post_init.connect(self._set_original, sender=cls)
